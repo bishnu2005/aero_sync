@@ -19,8 +19,7 @@ public class TelemetryIngestionService {
         this.telemetryProducer = telemetryProducer;
     }
 
-    // Slowed down to 30 seconds to prevent OpenSky from rate-limiting your IP
-    //@Scheduled(fixedRate = 30000)
+
     public void ingestFlights() {
         log.info("Fetching real-time flights over India from OpenSky API...");
 

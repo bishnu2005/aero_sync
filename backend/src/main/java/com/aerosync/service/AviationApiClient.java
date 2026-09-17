@@ -22,7 +22,6 @@ public class AviationApiClient {
         this.apiUrl = apiUrl;
     }
 
-    // Kept so your existing tests do not break
     public Mono<FlightTelemetry> getFlightByCallsign(String callsign) {
         return webClient.get()
                 .uri(apiUrl)
@@ -33,9 +32,7 @@ public class AviationApiClient {
                 .onErrorResume(e -> Mono.empty());
     }
 
-    // NEW: Fetches a batch of live flights over India
     public Flux<FlightTelemetry> getLiveFlights() {
-        // Bounding box for India keeps the API response fast and lightweight
         String indiaUrl = apiUrl + "?lamin=8.0&lomin=68.0&lamax=37.0&lomax=97.0";
 
         return webClient.get()

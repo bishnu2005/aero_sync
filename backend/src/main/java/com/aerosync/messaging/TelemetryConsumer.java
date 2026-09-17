@@ -35,22 +35,18 @@ public class TelemetryConsumer {
             FlightTelemetry telemetry = objectMapper.readValue(message, FlightTelemetry.class);
             String callsign = telemetry.callsign();
 
-            // Guard: Drop aircraft that are hiding their callsigns
             if (callsign == null || callsign.trim().isEmpty()) {
                 return;
             }
 
-            // 1. Write-Through Cache (Added error logging)
             valkeyTemplate.opsForHash().put("active_flights", callsign.trim(), message)
                     .doOnError(e -> log.error("Valkey failed to cache flight: {}", e.getMessage()))
                     .subscribe();
 
-            // 2. Asynchronously persist to Postgres
             repository.save(FlightRecord.fromTelemetry(telemetry))
                     .doOnError(e -> log.error("Postgres failed to save flight: {}", e.getMessage()))
                     .subscribe();
 
-            // 3. Broadcast to the browser WebSocket
             telemetryStream.broadcast(message);
 
         } catch (Exception e) {

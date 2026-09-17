@@ -22,7 +22,6 @@ public class FlightController {
         this.objectMapper = new ObjectMapper();
     }
 
-    // React fetches this instantly on initial page load
     @GetMapping("/active")
     public Flux<FlightTelemetry> getActiveFlights() {
         return valkeyTemplate.opsForHash().values("active_flights")

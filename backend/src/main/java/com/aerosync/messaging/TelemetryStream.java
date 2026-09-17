@@ -7,7 +7,6 @@ import reactor.core.publisher.Sinks;
 @Service
 public class TelemetryStream {
 
-    // A multicasting sink that acts as a hot publisher for multiple WebSocket clients
     private final Sinks.Many<String> sink = Sinks.many().multicast().onBackpressureBuffer();
 
     public void broadcast(String telemetryJson) {

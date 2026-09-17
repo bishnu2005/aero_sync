@@ -18,7 +18,6 @@ export default function App() {
   const [flights, setFlights] = useState({});
 
   useEffect(() => {
-    // 1. Instantly load active flights from Valkey cache
     fetch('http://localhost:8080/api/flights/active')
         .then(res => res.json())
         .then(data => {
@@ -67,7 +66,7 @@ export default function App() {
   return (
       <div style={{ position: 'relative', height: '100vh', width: '100vw', backgroundColor: '#f4f4f4', overflow: 'hidden' }}>
 
-        {/* Glass-morphism Sidebar */}
+
         <div style={{
           position: 'absolute',
           top: '24px',
@@ -88,7 +87,7 @@ export default function App() {
           boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)'
         }}>
 
-          {/* Header */}
+
           <div style={{ marginBottom: '24px' }}>
             <h1 style={{ margin: '0 0 4px 0', fontSize: '28px', fontWeight: '700', tracking: '-0.5px' }}>AeroSync</h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#94a3b8' }}>
@@ -97,7 +96,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Global Stats */}
+
           <div style={{ background: 'rgba(255, 255, 255, 0.05)', borderRadius: '16px', padding: '16px', marginBottom: '24px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
             <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '4px' }}>Total Tracked Flights</div>
             <div style={{ fontSize: '32px', fontWeight: '800', color: '#00ffcc' }}>{activePlanes.length}</div>
@@ -132,7 +131,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Map Layer */}
+
         <MapContainer
             center={[21.00, 78.00]}
             zoom={5}

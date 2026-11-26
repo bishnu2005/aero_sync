@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { getApiBaseUrl, getWsUrl } from '../config/api'
 import { getTileThemes } from '../lib/mapTheme'
 import { backoffDelay } from '../hooks/useTelemetrySocket'
+import { feedOf, formatUptime, matchesFeed } from '../lib/status'
 import { cardinal, findExactMatch, matchesQuery, sortFlights, toKnots, validateIdentifier } from '../lib/flight'
 
 describe('api url resolution', () => {
@@ -85,5 +86,29 @@ describe('map tile themes', () => {
     const themes = getTileThemes({ VITE_MAP_TILE_DARK: 'https://tiles.example/dark/{z}/{x}/{y}.png?key=k' })
     expect(themes.dark).toMatchObject({ url: 'https://tiles.example/dark/{z}/{x}/{y}.png?key=k', labelsUrl: null })
     expect(themes.light.url).toContain('World_Light_Gray_Base')
+  })
+})
+
+describe('observability helpers', () => {
+  it('formats uptime compactly', () => {
+    expect([0, 42, 125, 3725, 90061].map(formatUptime)).toEqual(['0s', '42s', '2m 5s', '1h 2m', '1d 1h'])
+  })
+
+  it('derives the feed label when an older backend omits it', () => {
+    expect(feedOf({ mode: 'LIVE' })).toBe('LIVE_FEED')
+    expect(feedOf({ mode: 'SIMULATION', reason: 'UPSTREAM_RATE_LIMITED_429' })).toBe('SIMULATED_FALLBACK')
+    expect(feedOf({ mode: 'SIMULATION', reason: 'MANUAL_SIMULATION_CONFIG' })).toBe('SIMULATED_MANUAL')
+  })
+})
+
+describe('feed filtering', () => {
+  it('keeps synthetic and real aircraft apart', () => {
+    const live = { origin: 'OPENSKY' }
+    const legacy = {}
+    const sim = { origin: 'SIMULATOR' }
+    expect([live, legacy, sim].map((f) => matchesFeed(f, 'LIVE_FEED'))).toEqual([true, true, false])
+    expect([live, legacy, sim].map((f) => matchesFeed(f, 'SIMULATED_FALLBACK'))).toEqual([false, false, true])
+    expect([live, legacy, sim].map((f) => matchesFeed(f, 'SIMULATED_MANUAL'))).toEqual([false, false, true])
+    expect([live, sim].map((f) => matchesFeed(f, null))).toEqual([true, true])
   })
 })

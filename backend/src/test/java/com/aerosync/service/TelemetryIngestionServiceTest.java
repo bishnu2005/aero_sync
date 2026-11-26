@@ -4,6 +4,8 @@ import com.aerosync.exception.OpenSkyRateLimitException;
 import com.aerosync.exception.OpenSkyUpstreamException;
 import com.aerosync.messaging.TelemetryProducer;
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.TelemetryMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -27,13 +29,15 @@ class TelemetryIngestionServiceTest {
     private TelemetryProducer producer;
     private TelemetryModeManager modeManager;
     private TelemetryIngestionService service;
+    private TelemetryMetrics metrics;
 
     @BeforeEach
     void setUp() {
         client = mock(AviationApiClient.class);
         producer = mock(TelemetryProducer.class);
         modeManager = mock(TelemetryModeManager.class);
-        service = new TelemetryIngestionService(client, producer, modeManager);
+        metrics = new TelemetryMetrics(new SimpleMeterRegistry());
+        service = new TelemetryIngestionService(client, producer, modeManager, metrics);
         when(producer.publish(any())).thenReturn(Mono.empty());
     }
 
@@ -47,7 +51,7 @@ class TelemetryIngestionServiceTest {
     void simulationModeNeverTouchesTheApi() {
         when(modeManager.tryAcquireLiveRequest()).thenReturn(false);
 
-        service.ingestFlights();
+        service.ingestFlights().block();
 
         verifyNoInteractions(client);
         verifyNoInteractions(producer);
@@ -58,7 +62,7 @@ class TelemetryIngestionServiceTest {
         when(modeManager.tryAcquireLiveRequest()).thenReturn(true);
         when(client.getLiveFlights()).thenReturn(Flux.error(new OpenSkyRateLimitException(Duration.ofMinutes(20))));
 
-        service.ingestFlights();
+        service.ingestFlights().block();
 
         verify(modeManager).recordUpstreamRateLimit(Duration.ofMinutes(20));
         verify(modeManager, never()).recordUpstreamSuccess();
@@ -71,7 +75,7 @@ class TelemetryIngestionServiceTest {
         when(modeManager.tryAcquireLiveRequest()).thenReturn(true);
         when(client.getLiveFlights()).thenReturn(Flux.error(new OpenSkyUpstreamException("HTTP 503", 503)));
 
-        service.ingestFlights();
+        service.ingestFlights().block();
 
         verify(modeManager).recordUpstreamError();
         verify(modeManager, never()).recordUpstreamSuccess();
@@ -85,12 +89,42 @@ class TelemetryIngestionServiceTest {
         when(modeManager.tryAcquireLiveRequest()).thenReturn(true);
         when(client.getLiveFlights()).thenReturn(Flux.just(a, b));
 
-        service.ingestFlights();
+        service.ingestFlights().block();
 
         verify(modeManager).recordUpstreamSuccess();
         verify(producer).publish(a);
         verify(producer).publish(b);
         verify(modeManager, never()).recordUpstreamError();
+        assertThat(metrics.upstreamSuccesses()).isEqualTo(1);
+        assertThat(metrics.publishedLive()).isEqualTo(2);
+    }
+
+    @Test
+    void scheduledMethodIsReactiveAndDefersQuotaCheckToSubscription() throws Exception {
+        assertThat(TelemetryIngestionService.class.getMethod("ingestFlights").getReturnType()).isEqualTo(Mono.class);
+        when(modeManager.tryAcquireLiveRequest()).thenReturn(false);
+
+        Mono<Void> tick = service.ingestFlights();
+        verify(modeManager, never()).tryAcquireLiveRequest();
+
+        tick.block();
+        tick.block();
+        verify(modeManager, org.mockito.Mockito.times(2)).tryAcquireLiveRequest();
+    }
+
+    @Test
+    void upstreamOutcomesAreCounted() {
+        when(modeManager.tryAcquireLiveRequest()).thenReturn(true);
+        when(client.getLiveFlights())
+                .thenReturn(Flux.error(new OpenSkyRateLimitException(null)))
+                .thenReturn(Flux.error(new OpenSkyUpstreamException("HTTP 500", 500)));
+
+        service.ingestFlights().block();
+        service.ingestFlights().block();
+
+        assertThat(metrics.upstreamRateLimits()).isEqualTo(1);
+        assertThat(metrics.upstreamErrors()).isEqualTo(1);
+        assertThat(metrics.publishedLive()).isZero();
     }
 
     @Test
@@ -98,7 +132,7 @@ class TelemetryIngestionServiceTest {
         when(modeManager.tryAcquireLiveRequest()).thenReturn(true);
         when(client.getLiveFlights()).thenReturn(Flux.empty());
 
-        service.ingestFlights();
+        service.ingestFlights().block();
 
         verify(modeManager).recordUpstreamSuccess();
         verifyNoInteractions(producer);
@@ -110,7 +144,7 @@ class TelemetryIngestionServiceTest {
         when(client.getLiveFlights()).thenReturn(Flux.just(flight("AIC860", "800a01", 1L)));
         when(producer.publish(any())).thenReturn(Mono.error(new IllegalStateException("broker down")));
 
-        service.ingestFlights(); // must not throw
+        service.ingestFlights().block(); // must not throw
 
         verify(modeManager).recordUpstreamSuccess();
         verify(modeManager, never()).recordUpstreamError();

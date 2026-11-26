@@ -1,45 +1,45 @@
-const SIMULATION_TITLES = {
-  DAILY_QUOTA_EXHAUSTED: 'Simulation Mode — Daily Free-Tier Quota Reached',
-  UPSTREAM_RATE_LIMITED_429: 'Simulation Mode — OpenSky Rate Limited (429)',
-  UPSTREAM_UNAVAILABLE: 'Simulation Mode — OpenSky Unavailable',
-  MANUAL_SIMULATION_CONFIG: 'Simulation Mode — Live Feed Disabled',
+import { feedOf } from '../lib/status'
+
+// Honest data-source badge: real OpenSky data is "LIVE FEED"; anything synthetic says so.
+const FALLBACK_REASONS = {
+  DAILY_QUOTA_EXHAUSTED: (s) => `Daily OpenSky quota reached (${s.requestsUsedToday}/${s.dailyLimit})`,
+  UPSTREAM_RATE_LIMITED_429: () => 'OpenSky rate-limited the server (HTTP 429)',
+  UPSTREAM_UNAVAILABLE: () => 'OpenSky API unreachable',
 }
 
 export default function StatusBadge({ status }) {
-  if (!status) {
+  if (!status || status.unavailable) {
     return (
       <div className="status-pill status-pill--muted" role="status">
         <span className="status-dot" />
-        <span className="status-title">Checking radar status…</span>
-      </div>
-    )
-  }
-  if (status.unavailable) {
-    return (
-      <div className="status-pill status-pill--muted" role="status">
-        <span className="status-dot" />
-        <span className="status-title">Status unavailable</span>
+        <span className="status-title">{status ? 'Status unavailable' : 'Checking radar status…'}</span>
       </div>
     )
   }
 
-  const live = status.mode === 'LIVE'
-  const quota = `${status.requestsUsedToday ?? 0}/${status.dailyLimit ?? 0} polls`
+  const feed = feedOf(status)
+  const live = feed === 'LIVE_FEED'
+  let title = 'LIVE FEED'
+  let sub = `OpenSky Network · ${status.requestsUsedToday}/${status.dailyLimit} polls today`
+  if (feed === 'SIMULATED_FALLBACK') {
+    title = 'SIMULATED FALLBACK'
+    sub = `${(FALLBACK_REASONS[status.reason] ?? (() => 'Live feed unavailable'))(status)} · synthetic flights`
+  } else if (feed === 'SIMULATED_MANUAL') {
+    title = 'SIMULATED FEED'
+    sub = 'Live feed disabled by configuration · synthetic flights'
+  }
+
   return (
     <div
       className={`status-pill ${live ? 'status-pill--live' : 'status-pill--sim'}`}
       role="status"
-      data-mode={status.mode}
+      data-feed={feed}
       title={status.message}
     >
       <span className="status-dot" />
       <div className="status-text">
-        <span className="status-title">
-          {live ? 'Live Radar (OpenSky)' : SIMULATION_TITLES[status.reason] ?? 'Simulation Mode'}
-        </span>
-        <span className="status-sub">
-          {live ? quota : `${quota} · ${status.reason}`}
-        </span>
+        <span className="status-title">{title}</span>
+        <span className="status-sub">{sub}</span>
       </div>
     </div>
   )

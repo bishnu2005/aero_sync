@@ -77,6 +77,7 @@ class AviationApiClientTest {
                     assertThat(first.velocity()).isEqualTo(245.5);
                     assertThat(first.heading()).isEqualTo(210.3);
                     assertThat(first.timestamp()).isEqualTo(1764237595000L);
+                    assertThat(flights).allMatch(f -> "OPENSKY".equals(f.origin()));
 
                     assertThat(flights.get(1).altitude()).isEqualTo(10000.0);
                     // Missing baro altitude falls back to geometric altitude.

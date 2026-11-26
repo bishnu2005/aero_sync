@@ -2,6 +2,7 @@ package com.aerosync.messaging;
 
 import com.aerosync.model.FlightRecord;
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.TelemetryMetrics;
 import com.aerosync.repository.FlightRecordRepository;
 import com.aerosync.service.ActiveFlightService;
 import org.slf4j.Logger;
@@ -35,6 +36,7 @@ public class TelemetryConsumer {
     private final ObjectMapper objectMapper;
     private final ReactiveStringRedisTemplate valkeyTemplate;
     private final Clock clock;
+    private final TelemetryMetrics metrics;
     private final long persistIntervalMillis;
     private final Map<String, Long> lastPersistedAt = new ConcurrentHashMap<>();
 
@@ -43,12 +45,14 @@ public class TelemetryConsumer {
                              ReactiveStringRedisTemplate valkeyTemplate,
                              ObjectMapper objectMapper,
                              Clock clock,
+                             TelemetryMetrics metrics,
                              @Value("${aerosync.db.persist-interval-seconds:15}") long persistIntervalSeconds) {
         this.telemetryStream = telemetryStream;
         this.repository = repository;
         this.valkeyTemplate = valkeyTemplate;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.metrics = metrics;
         this.persistIntervalMillis = Math.max(0, persistIntervalSeconds) * 1000;
     }
 
@@ -58,6 +62,7 @@ public class TelemetryConsumer {
         if (telemetry == null) {
             return;
         }
+        metrics.consumed();
         String callsign = telemetry.callsign().trim();
         FlightTelemetry normalized = telemetry.withCallsign(callsign);
 
@@ -76,15 +81,18 @@ public class TelemetryConsumer {
 
     private FlightTelemetry parse(String message) {
         if (message == null || message.isBlank()) {
+            metrics.droppedMalformed();
             return null;
         }
         try {
             FlightTelemetry telemetry = objectMapper.readValue(message, FlightTelemetry.class);
             if (telemetry == null || telemetry.callsign() == null || telemetry.callsign().isBlank()) {
+                metrics.droppedBlankCallsign();
                 return null;
             }
             return telemetry;
         } catch (RuntimeException e) {
+            metrics.droppedMalformed();
             log.warn("Dropping malformed telemetry message: {}", e.getMessage());
             return null;
         }
@@ -94,23 +102,30 @@ public class TelemetryConsumer {
         try {
             valkeyTemplate.<String, String>opsForHash()
                     .put(ActiveFlightService.ACTIVE_FLIGHTS_KEY, callsign, payload)
-                    .subscribe(ok -> { }, e -> log.error("Valkey failed to cache {}: {}", callsign, e.getMessage()));
+                    .subscribe(ok -> metrics.cacheWrite(true), e -> {
+                        metrics.cacheWrite(false);
+                        log.error("Valkey failed to cache {}: {}", callsign, e.getMessage());
+                    });
         } catch (RuntimeException e) {
+            metrics.cacheWrite(false);
             log.error("Valkey failed to cache {}: {}", callsign, e.getMessage());
         }
     }
 
     private void persistThrottled(String callsign, FlightTelemetry telemetry) {
         if (!shouldPersist(callsign)) {
+            metrics.dbWriteThrottled();
             return;
         }
         try {
             repository.save(FlightRecord.fromTelemetry(telemetry))
-                    .subscribe(saved -> { }, e -> {
+                    .subscribe(saved -> metrics.dbWriteSucceeded(), e -> {
+                        metrics.dbWriteFailed();
                         lastPersistedAt.remove(callsign); // retry on the next message
                         log.error("PostgreSQL failed to save {}: {}", callsign, e.getMessage());
                     });
         } catch (RuntimeException e) {
+            metrics.dbWriteFailed();
             lastPersistedAt.remove(callsign);
             log.error("PostgreSQL failed to save {}: {}", callsign, e.getMessage());
         }

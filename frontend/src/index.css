@@ -662,3 +662,68 @@ input:focus-visible {
     width: auto;
   }
 }
+
+/* ---------- System health bar ---------- */
+.health-bar-wrap {
+  position: absolute;
+  left: 388px;
+  right: 84px;
+  bottom: 24px;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.health-bar {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+  border-radius: 14px;
+  padding: 8px 16px;
+  font-size: 12px;
+}
+
+.health-stat {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.health-label {
+  color: var(--text-muted);
+}
+
+.health-value {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-stat--ok .health-value {
+  color: var(--live);
+}
+
+.health-stat--warn .health-value {
+  color: var(--sim);
+}
+
+.health-stat--bad .health-value {
+  color: var(--danger);
+}
+
+@media (max-width: 1100px) {
+  .health-bar-wrap {
+    left: 20px;
+    right: 84px;
+    bottom: 20px;
+  }
+}
+
+@media (max-width: 720px) {
+  .health-bar-wrap {
+    display: none;
+  }
+}

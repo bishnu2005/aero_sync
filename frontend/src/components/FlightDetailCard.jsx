@@ -38,6 +38,7 @@ export default function FlightDetailCard({ flight, onClose, onCenter }) {
 
       <div className="detail-source">
         Source: <strong>{SOURCE_LABELS[flight.source] ?? 'Live stream'}</strong>
+        {' · '}Origin: <strong>{flight.origin === 'SIMULATOR' ? 'Simulator (synthetic)' : 'OpenSky Network'}</strong>
       </div>
 
       <div className="metric-grid">

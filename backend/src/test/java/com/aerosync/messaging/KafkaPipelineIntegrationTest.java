@@ -15,6 +15,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import reactor.core.publisher.Mono;
@@ -46,7 +47,10 @@ import static org.mockito.Mockito.when;
         "aerosync.simulator.initial-delay-ms=3600000",
         "aerosync.db.prune-initial-delay-ms=3600000",
         "aerosync.cache.eviction-initial-delay-ms=3600000",
-        "aerosync.cors.allowed-origins=http://localhost:5173"
+        "aerosync.cors.allowed-origins=http://localhost:5173",
+        // Valkey/PostgreSQL are mocked here, so their connection-level health checks are switched off.
+        "management.health.redis.enabled=false",
+        "management.health.r2dbc.enabled=false"
 })
 @EmbeddedKafka(partitions = 1, topics = TelemetryProducer.TOPIC)
 class KafkaPipelineIntegrationTest {
@@ -103,7 +107,8 @@ class KafkaPipelineIntegrationTest {
                 .subscribe();
         connected.asMono().block(Duration.ofSeconds(10));
 
-        FlightTelemetry flight = new FlightTelemetry(" ITEST1 ", "abc123", 20.0, 78.0, 33000, 230, 45, System.currentTimeMillis());
+        FlightTelemetry flight = new FlightTelemetry(" ITEST1 ", "abc123", 20.0, 78.0, 33000, 230, 45, System.currentTimeMillis(),
+                FlightTelemetry.ORIGIN_SIMULATOR);
         // Retry until the consumer group has its partition assignment.
         String frame = null;
         for (int attempt = 0; attempt < 10 && frame == null; attempt++) {
@@ -116,6 +121,36 @@ class KafkaPipelineIntegrationTest {
         verify(hash, timeout(10_000).atLeastOnce())
                 .put(eq(ActiveFlightService.ACTIVE_FLIGHTS_KEY), eq("ITEST1"), anyString());
         verify(repository, timeout(10_000).atLeastOnce()).save(any(FlightRecord.class));
+
+        // The same event is visible to observability.
+        WebTestClient http = WebTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
+        http.get().uri("/api/system/metrics").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.feed").isEqualTo("SIMULATED_MANUAL")
+                .jsonPath("$.eventsConsumed").value(v -> assertThat(((Number) v).longValue()).isPositive());
+        http.get().uri("/actuator/metrics/aerosync.telemetry.consumed").exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.measurements[0].value").value(v -> assertThat(((Number) v).doubleValue()).isPositive());
+    }
+
+    @Test
+    void actuatorHealthProbesAndPrometheusAreExposed() {
+        WebTestClient http = WebTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
+        http.get().uri("/actuator/health").exchange()
+                .expectStatus().isOk()
+                .expectBody().jsonPath("$.status").isEqualTo("UP");
+        http.get().uri("/actuator/health/liveness").exchange().expectStatus().isOk();
+        http.get().uri("/actuator/health/readiness").exchange().expectStatus().isOk();
+        http.get().uri("/actuator/prometheus").exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).value(body -> assertThat(body)
+                        .contains("aerosync_telemetry_consumed_total")
+                        .contains("aerosync_websocket_subscribers")
+                        .contains("aerosync_opensky_quota_limit")
+                        .contains("aerosync_mode_simulation")
+                        .contains("application=\"aerosync-backend\""));
+        http.get().uri("/actuator/env").exchange().expectStatus().isNotFound(); // not exposed
     }
 
     @Test

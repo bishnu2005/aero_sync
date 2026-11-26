@@ -52,33 +52,107 @@ describe('AeroSync dashboard', () => {
     expect(MockWebSocket.latest().url).toBe('ws://localhost:8080/ws/telemetry')
   })
 
-  it('shows the live status pill with the quota counter', async () => {
+  it('shows the LIVE FEED badge with the quota counter', async () => {
     installFetch({ flights: [] })
     render(<App />)
 
-    const pill = await screen.findByText('Live Radar (OpenSky)')
-    expect(pill.closest('[role="status"]')).toHaveAttribute('data-mode', 'LIVE')
-    expect(screen.getByText('12/400 polls')).toBeInTheDocument()
+    const pill = await screen.findByText('LIVE FEED')
+    expect(pill.closest('[role="status"]')).toHaveAttribute('data-feed', 'LIVE_FEED')
+    expect(screen.getByText('OpenSky Network · 12/400 polls today')).toBeInTheDocument()
   })
 
   it.each([
-    ['DAILY_QUOTA_EXHAUSTED', 'Simulation Mode — Daily Free-Tier Quota Reached', '400/400 polls · DAILY_QUOTA_EXHAUSTED'],
-    ['UPSTREAM_RATE_LIMITED_429', 'Simulation Mode — OpenSky Rate Limited (429)', '37/400 polls · UPSTREAM_RATE_LIMITED_429'],
-  ])('renders the simulation badge for %s', async (reason, title, sub) => {
+    ['DAILY_QUOTA_EXHAUSTED', 'Daily OpenSky quota reached (400/400) · synthetic flights'],
+    ['UPSTREAM_RATE_LIMITED_429', 'OpenSky rate-limited the server (HTTP 429) · synthetic flights'],
+    ['UPSTREAM_UNAVAILABLE', 'OpenSky API unreachable · synthetic flights'],
+  ])('labels automatic failover (%s) as SIMULATED FALLBACK', async (reason, sub) => {
     installFetch({
       status: {
         ...LIVE_STATUS,
         mode: 'SIMULATION',
         reason,
-        requestsUsedToday: reason === 'DAILY_QUOTA_EXHAUSTED' ? 400 : 37,
+        feed: 'SIMULATED_FALLBACK',
+        requestsUsedToday: 400,
         message: 'Live flight simulator active.',
       },
     })
     render(<App />)
 
-    const badge = await screen.findByText(title)
-    expect(badge.closest('[role="status"]')).toHaveAttribute('data-mode', 'SIMULATION')
+    const badge = await screen.findByText('SIMULATED FALLBACK')
+    expect(badge.closest('[role="status"]')).toHaveAttribute('data-feed', 'SIMULATED_FALLBACK')
     expect(screen.getByText(sub)).toBeInTheDocument()
+    expect(screen.queryByText('LIVE FEED')).not.toBeInTheDocument()
+  })
+
+  it('labels a configured simulator as SIMULATED FEED, never as live', async () => {
+    installFetch({
+      status: { ...LIVE_STATUS, mode: 'SIMULATION', reason: 'MANUAL_SIMULATION_CONFIG', feed: 'SIMULATED_MANUAL' },
+    })
+    render(<App />)
+    expect(await screen.findByText('SIMULATED FEED')).toBeInTheDocument()
+    expect(screen.getByText('Live feed disabled by configuration · synthetic flights')).toBeInTheDocument()
+  })
+
+  it('shows only real aircraft under LIVE FEED and ignores simulator frames', async () => {
+    installFetch({
+      flights: [
+        { ...AIC860, origin: 'SIMULATOR' },
+        { ...IGO612, callsign: 'ABY800', icao24: '896558', origin: 'OPENSKY' },
+      ],
+    })
+    render(<App />)
+    await screen.findByText('LIVE FEED')
+
+    await waitFor(() => expect(screen.getByTestId('tracked-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('feed-card-ABY800')).toBeInTheDocument()
+    expect(screen.queryByTestId('feed-card-AIC860')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('marker-AIC860')).not.toBeInTheDocument()
+
+    act(() => MockWebSocket.latest().message(flight('VTI941', '800c03', { origin: 'SIMULATOR' })))
+    await new Promise((r) => setTimeout(r, 150))
+    expect(screen.queryByTestId('feed-card-VTI941')).not.toBeInTheDocument()
+    expect(screen.getByTestId('tracked-count')).toHaveTextContent('1')
+  })
+
+  it('shows only simulator aircraft under a simulated badge', async () => {
+    installFetch({
+      status: { ...LIVE_STATUS, mode: 'SIMULATION', reason: 'UPSTREAM_UNAVAILABLE', feed: 'SIMULATED_FALLBACK' },
+      flights: [
+        { ...AIC860, origin: 'SIMULATOR' },
+        { ...IGO612, callsign: 'ABY800', icao24: '896558', origin: 'OPENSKY' },
+      ],
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByText('SIMULATED FALLBACK')
+
+    await waitFor(() => expect(screen.getByTestId('tracked-count')).toHaveTextContent('1'))
+    await user.click(screen.getByTestId('feed-card-AIC860'))
+    expect(within(detailCard()).getByText('Simulator (synthetic)')).toBeInTheDocument()
+    expect(screen.queryByTestId('feed-card-ABY800')).not.toBeInTheDocument()
+  })
+
+  it('renders live pipeline health from /api/system/metrics', async () => {
+    const fetchMock = installFetch()
+    render(<App />)
+
+    const bar = within(await screen.findByRole('region', { name: 'System health' }))
+    await waitFor(() => expect(bar.getByText('2.7')).toBeInTheDocument())
+    expect(bar.getByText('UP')).toBeInTheDocument()
+    expect(bar.getByText('12,345')).toBeInTheDocument()
+    expect(bar.getByText('92%')).toBeInTheDocument()
+    expect(bar.getByText('3')).toBeInTheDocument()
+    expect(bar.getByText('2')).toBeInTheDocument() // 1 error + 1 rate-limit
+    expect(bar.getByText('1h 2m')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8080/api/system/metrics')
+  })
+
+  it('shows API DOWN in the health bar when the backend is unreachable', async () => {
+    installFetch({ metrics: null })
+    render(<App />)
+
+    const bar = within(await screen.findByRole('region', { name: 'System health' }))
+    expect(await bar.findByText('DOWN')).toBeInTheDocument()
   })
 
   it('filters the telemetry feed by callsign and ICAO24 while typing', async () => {

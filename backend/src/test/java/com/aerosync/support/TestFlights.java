@@ -12,7 +12,11 @@ public final class TestFlights {
     private TestFlights() {}
 
     public static FlightTelemetry flight(String callsign, String icao24, long timestamp) {
-        return new FlightTelemetry(callsign, icao24, 28.55, 77.10, 35000, 245, 210, timestamp);
+        return new FlightTelemetry(callsign, icao24, 28.55, 77.10, 35000, 245, 210, timestamp, FlightTelemetry.ORIGIN_OPENSKY);
+    }
+
+    public static FlightTelemetry simulated(String callsign, String icao24, long timestamp) {
+        return new FlightTelemetry(callsign, icao24, 28.55, 77.10, 35000, 245, 210, timestamp, FlightTelemetry.ORIGIN_SIMULATOR);
     }
 
     public static String json(FlightTelemetry flight) {
@@ -20,6 +24,6 @@ public final class TestFlights {
     }
 
     public static FlightRecord record(String callsign, String icao24, long recordedAt) {
-        return new FlightRecord(1L, callsign, icao24, 19.09, 72.87, 12000.0, 180.0, 90.0, recordedAt);
+        return new FlightRecord(1L, callsign, icao24, 19.09, 72.87, 12000.0, 180.0, 90.0, recordedAt, FlightTelemetry.ORIGIN_OPENSKY);
     }
 }

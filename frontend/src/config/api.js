@@ -29,5 +29,6 @@ export const apiUrl = (path) => `${getApiBaseUrl()}${path}`
 export const ENDPOINTS = {
   activeFlights: '/api/flights/active',
   systemStatus: '/api/system/status',
+  systemMetrics: '/api/system/metrics',
   flight: (identifier) => `/api/flights/${encodeURIComponent(identifier)}`,
 }

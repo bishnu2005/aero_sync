@@ -34,6 +34,7 @@ class DataRetentionServiceTest {
     private ReactiveHashOperations<String, String, String> hash;
     private ActiveFlightService activeFlightService;
     private DataRetentionService service;
+    private TelemetryModeManager modeManager;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -42,7 +43,8 @@ class DataRetentionServiceTest {
         ReactiveStringRedisTemplate valkey = mock(ReactiveStringRedisTemplate.class);
         hash = mock(ReactiveHashOperations.class);
         when(valkey.<String, String>opsForHash()).thenReturn(hash);
-        activeFlightService = new ActiveFlightService(valkey, repository, TestFlights.MAPPER, clock, 300);
+        modeManager = new TelemetryModeManager(true, 400, 3, 900_000, clock);
+        activeFlightService = new ActiveFlightService(valkey, repository, TestFlights.MAPPER, clock, modeManager, 300);
         service = new DataRetentionService(repository, activeFlightService, mock(TelemetryConsumer.class), clock, 24);
     }
 
@@ -54,7 +56,7 @@ class DataRetentionServiceTest {
     void prunesRowsOlderThanRetentionWindow() {
         when(repository.deleteOlderThan(anyLong())).thenReturn(Mono.just(42L));
 
-        service.pruneHistory();
+        service.pruneHistory().block();
 
         verify(repository).deleteOlderThan(clock.millis() - Duration.ofHours(24).toMillis());
     }
@@ -62,7 +64,7 @@ class DataRetentionServiceTest {
     @Test
     void pruneFailureIsLoggedNotThrown() {
         when(repository.deleteOlderThan(anyLong())).thenReturn(Mono.error(new IllegalStateException("db down")));
-        assertThatCode(service::pruneHistory).doesNotThrowAnyException();
+        assertThatCode(() -> service.pruneHistory().block()).doesNotThrowAnyException();
     }
 
     @Test
@@ -80,10 +82,26 @@ class DataRetentionServiceTest {
     }
 
     @Test
+    void evictsTheOtherFeedsLeftoversAfterAModeSwitch() {
+        long now = clock.millis();
+        when(hash.entries("active_flights")).thenReturn(Flux.just(
+                entry("AIC860", json(TestFlights.simulated("AIC860", "800a01", now))),
+                entry("ABY800", json(flight("ABY800", "896558", now)))));
+        when(hash.remove(eq("active_flights"), any(Object[].class))).thenReturn(Mono.just(1L));
+
+        activeFlightService.evictStale().block();            // live mode: simulator leftovers go
+        verify(hash).remove("active_flights", "AIC860");
+
+        modeManager.recordUpstreamRateLimit();               // now in simulated fallback
+        activeFlightService.evictStale().block();            // real OpenSky leftovers go
+        verify(hash).remove("active_flights", "ABY800");
+    }
+
+    @Test
     void nothingToEvictSkipsTheDelete() {
         when(hash.entries("active_flights")).thenReturn(Flux.just(entry("AIC860", json(flight("AIC860", "800a01", clock.millis())))));
 
-        service.evictStaleFlights();
+        service.evictStaleFlights().block();
 
         verify(hash, never()).remove(any(), any(Object[].class));
     }
@@ -91,6 +109,6 @@ class DataRetentionServiceTest {
     @Test
     void evictionFailureIsLoggedNotThrown() {
         when(hash.entries("active_flights")).thenReturn(Flux.error(new IllegalStateException("valkey down")));
-        assertThatCode(service::evictStaleFlights).doesNotThrowAnyException();
+        assertThatCode(() -> service.evictStaleFlights().block()).doesNotThrowAnyException();
     }
 }

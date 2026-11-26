@@ -1,6 +1,7 @@
 package com.aerosync.messaging;
 
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.TelemetryMetrics;
 import com.aerosync.service.TelemetryModeManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -46,6 +48,7 @@ public class FlightSimulator {
     private final TelemetryProducer producer;
     private final TelemetryModeManager modeManager;
     private final Clock clock;
+    private final TelemetryMetrics metrics;
     private final double secondsPerTick;
 
     // Guarded by "this".
@@ -56,11 +59,13 @@ public class FlightSimulator {
     public FlightSimulator(TelemetryProducer producer,
                            TelemetryModeManager modeManager,
                            Clock clock,
+                           TelemetryMetrics metrics,
                            @Value("${aerosync.simulator.interval-ms:3000}") long intervalMs,
                            @Value("${aerosync.simulator.time-scale:4.0}") double timeScale) {
         this.producer = producer;
         this.modeManager = modeManager;
         this.clock = clock;
+        this.metrics = metrics;
         this.secondsPerTick = Math.max(1, intervalMs) / 1000.0 * Math.max(0.1, timeScale);
         for (int i = 0; i < CORRIDORS.size(); i++) {
             progress[i] = (0.08 + i * 0.11) % 1.0; // spread aircraft along their routes
@@ -70,18 +75,23 @@ public class FlightSimulator {
 
     @Scheduled(fixedDelayString = "${aerosync.simulator.interval-ms:3000}",
             initialDelayString = "${aerosync.simulator.initial-delay-ms:2000}")
-    public void tick() {
-        if (!modeManager.isSimulationMode()) {
-            return;
-        }
-        try {
-            Flux.fromIterable(advance())
+    /** Reactive {@code @Scheduled}: the next tick is scheduled only after this frame reached Kafka. */
+    public Mono<Void> tick() {
+        return Mono.defer(() -> {
+            if (!modeManager.isSimulationMode()) {
+                return Mono.empty();
+            }
+            List<FlightTelemetry> frame = advance();
+            return Flux.fromIterable(frame)
                     .concatMap(producer::publish)
                     .then()
-                    .block(Duration.ofSeconds(30));
-        } catch (RuntimeException e) {
-            log.error("Simulator tick failed: {}", e.getMessage());
-        }
+                    .timeout(Duration.ofSeconds(30))
+                    .doOnSuccess(v -> metrics.published(TelemetryMetrics.Source.SIMULATED, frame.size()))
+                    .onErrorResume(e -> {
+                        log.error("Simulator tick failed: {}", e.getMessage());
+                        return Mono.empty();
+                    });
+        });
     }
 
     /** Moves every aircraft one tick along its corridor and returns the new positions. */
@@ -112,7 +122,8 @@ public class FlightSimulator {
             double altitude = Math.round(c.cruiseAltitudeFt() + 150 * Math.sin(tick * 0.05 + i));
             double velocity = Math.round((c.velocityMps() + 2 * Math.sin(tick * 0.07 + i)) * 10) / 10.0;
 
-            frame.add(new FlightTelemetry(c.callsign(), c.icao24(), lat, lon, altitude, velocity, heading, now));
+            frame.add(new FlightTelemetry(c.callsign(), c.icao24(), lat, lon, altitude, velocity, heading, now,
+                    FlightTelemetry.ORIGIN_SIMULATOR));
         }
         return frame;
     }

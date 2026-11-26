@@ -1,7 +1,9 @@
 package com.aerosync.messaging;
 
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.TelemetryMetrics;
 import com.aerosync.service.TelemetryModeManager;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.aerosync.support.MutableClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,13 +29,15 @@ class FlightSimulatorTest {
     private TelemetryProducer producer;
     private TelemetryModeManager modeManager;
     private FlightSimulator simulator;
+    private TelemetryMetrics metrics;
 
     @BeforeEach
     void setUp() {
         producer = mock(TelemetryProducer.class);
         modeManager = mock(TelemetryModeManager.class);
         when(producer.publish(any())).thenReturn(Mono.empty());
-        simulator = new FlightSimulator(producer, modeManager, clock, 3000, 4.0);
+        metrics = new TelemetryMetrics(new SimpleMeterRegistry());
+        simulator = new FlightSimulator(producer, modeManager, clock, metrics, 3000, 4.0);
     }
 
     @Test
@@ -47,7 +51,7 @@ class FlightSimulatorTest {
     void doesNothingInLiveMode() {
         when(modeManager.isSimulationMode()).thenReturn(false);
 
-        simulator.tick();
+        simulator.tick().block();
 
         verifyNoInteractions(producer);
     }
@@ -56,9 +60,10 @@ class FlightSimulatorTest {
     void publishesEightFlightsThroughKafkaInSimulationMode() {
         when(modeManager.isSimulationMode()).thenReturn(true);
 
-        simulator.tick();
+        simulator.tick().block();
 
         verify(producer, times(8)).publish(any(FlightTelemetry.class));
+        assertThat(metrics.publishedSimulated()).isEqualTo(8);
     }
 
     @Test
@@ -66,7 +71,7 @@ class FlightSimulatorTest {
         when(modeManager.isSimulationMode()).thenReturn(true);
         when(producer.publish(any())).thenReturn(Mono.error(new IllegalStateException("broker down")));
 
-        simulator.tick(); // must not throw
+        simulator.tick().block(); // must not throw
     }
 
     @Test
@@ -84,6 +89,8 @@ class FlightSimulatorTest {
             assertThat(f.velocity()).isBetween(208.0, 262.0);
             assertThat(f.heading()).isBetween(0.0, 360.0);
             assertThat(f.timestamp()).isEqualTo(clock.millis());
+            assertThat(f.origin()).isEqualTo("SIMULATOR");
+            assertThat(f.isSimulated()).isTrue();
         }
         assertThat(icaos).hasSize(8);
     }

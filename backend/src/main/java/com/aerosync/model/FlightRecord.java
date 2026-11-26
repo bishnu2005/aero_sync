@@ -13,7 +13,8 @@ public record FlightRecord(
         Double altitude,
         Double velocity,
         Double heading,
-        Long recordedAt
+        Long recordedAt,
+        String origin
 ) {
     public static FlightRecord fromTelemetry(FlightTelemetry t) {
         return new FlightRecord(
@@ -25,7 +26,8 @@ public record FlightRecord(
                 t.altitude(),
                 t.velocity(),
                 t.heading(),
-                t.timestamp()
+                t.timestamp(),
+                t.origin()
         );
     }
 }

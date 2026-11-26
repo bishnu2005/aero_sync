@@ -204,7 +204,14 @@ public class TelemetryModeManager {
     public synchronized SystemStatus getStatus(long activeFlightCount) {
         rollWindowIfExpired(clock.instant());
         return new SystemStatus(mode, reason, describe(), requestsUsedToday, dailyLimit, windowResetAt,
-                Math.max(0, activeFlightCount));
+                Math.max(0, activeFlightCount), feedLabel());
+    }
+
+    private String feedLabel() {
+        if (mode == Mode.LIVE) {
+            return SystemStatus.LIVE_FEED;
+        }
+        return reason == FailoverReason.MANUAL_SIMULATION_CONFIG ? SystemStatus.SIMULATED_MANUAL : SystemStatus.SIMULATED_FALLBACK;
     }
 
     private String describe() {

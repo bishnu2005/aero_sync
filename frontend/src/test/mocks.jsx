@@ -37,11 +37,15 @@ const json = (status, body) => ({
 })
 
 /** fetch stub routing the AeroSync API; `lookups` maps identifier -> [status, body]. */
-export function installFetch({ flights = [], status = LIVE_STATUS, lookups = {} } = {}) {
+export function installFetch({ flights = [], status = LIVE_STATUS, metrics = METRICS, lookups = {} } = {}) {
   const fetchMock = vi.fn(async (input) => {
     const url = String(input)
     if (url.endsWith('/api/flights/active')) return json(200, flights)
     if (url.endsWith('/api/system/status')) return json(200, status)
+    if (url.endsWith('/api/system/metrics')) {
+      if (metrics === null) throw new TypeError('Failed to fetch')
+      return json(200, metrics)
+    }
     const match = url.match(/\/api\/flights\/([^/]+)$/)
     if (match) {
       const id = decodeURIComponent(match[1])
@@ -57,6 +61,28 @@ export function installFetch({ flights = [], status = LIVE_STATUS, lookups = {} 
   return fetchMock
 }
 
+export const METRICS = {
+  feed: 'LIVE_FEED',
+  eventsPerSecond: 2.7,
+  eventsConsumed: 12345,
+  eventsPublishedLive: 12000,
+  eventsPublishedSimulated: 345,
+  eventsDropped: 3,
+  kafkaPublishFailures: 0,
+  cacheHitRatio: 0.917,
+  cacheLookups: 12,
+  cacheWriteFailures: 0,
+  dbWrites: 800,
+  dbWritesThrottled: 11000,
+  dbWriteFailures: 0,
+  upstreamRequests: 40,
+  upstreamErrors: 1,
+  upstreamRateLimited: 1,
+  websocketSubscribers: 3,
+  uptimeSeconds: 3725,
+  timestamp: '2026-11-27T10:00:00Z',
+}
+
 export const LIVE_STATUS = {
   mode: 'LIVE',
   reason: 'NONE',
@@ -65,6 +91,7 @@ export const LIVE_STATUS = {
   dailyLimit: 400,
   windowResetAt: '2026-11-28T00:00:00Z',
   activeFlightCount: 2,
+  feed: 'LIVE_FEED',
 }
 
 export const flight = (callsign, icao24, overrides = {}) => ({

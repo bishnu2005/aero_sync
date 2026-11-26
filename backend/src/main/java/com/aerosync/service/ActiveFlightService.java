@@ -23,6 +23,10 @@ import java.util.Map;
  * Read side of the Valkey {@value #ACTIVE_FLIGHTS_KEY} hash (field = callsign, value = telemetry JSON).
  * Corrupted values are logged and skipped, and entries older than
  * {@code aerosync.cache.stale-seconds} are treated as gone.
+ *
+ * <p>Reads are feed-consistent: while the live feed is active, simulator-generated entries are hidden, and while
+ * the simulator is active, real OpenSky entries are hidden. So a mode switch never shows synthetic aircraft under
+ * a "LIVE FEED" label (or vice versa), and {@link #evictStale()} removes the other feed's leftovers.
  */
 @Service
 public class ActiveFlightService {
@@ -37,17 +41,20 @@ public class ActiveFlightService {
     private final FlightRecordRepository repository;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final TelemetryModeManager modeManager;
     private final long staleMillis;
 
     public ActiveFlightService(ReactiveStringRedisTemplate valkeyTemplate,
                                FlightRecordRepository repository,
                                ObjectMapper objectMapper,
                                Clock clock,
+                               TelemetryModeManager modeManager,
                                @Value("${aerosync.cache.stale-seconds:300}") long staleSeconds) {
         this.valkeyTemplate = valkeyTemplate;
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.modeManager = modeManager;
         this.staleMillis = Math.max(1, staleSeconds) * 1000;
     }
 
@@ -96,7 +103,7 @@ public class ActiveFlightService {
         return hash().entries(ACTIVE_FLIGHTS_KEY)
                 .filter(entry -> {
                     FlightTelemetry flight = parse(entry.getValue());
-                    return flight == null || isStale(flight, now);
+                    return flight == null || isStale(flight, now) || !matchesCurrentFeed(flight);
                 })
                 .map(Map.Entry::getKey)
                 .collectList()
@@ -110,7 +117,7 @@ public class ActiveFlightService {
         return hash().values(ACTIVE_FLIGHTS_KEY)
                 .<FlightTelemetry>handle((json, sink) -> {
                     FlightTelemetry flight = parse(json);
-                    if (flight != null && !isStale(flight, now)) {
+                    if (flight != null && !isStale(flight, now) && matchesCurrentFeed(flight)) {
                         sink.next(flight);
                     }
                 })
@@ -120,7 +127,7 @@ public class ActiveFlightService {
     private Mono<List<FlightTelemetry>> readRecentFromArchive() {
         return repository.findLatestSince(clock.millis() - staleMillis)
                 .map(FlightTelemetry::fromRecord)
-                .filter(f -> f.callsign() != null && !f.callsign().isBlank())
+                .filter(f -> f.callsign() != null && !f.callsign().isBlank() && matchesCurrentFeed(f))
                 .collectSortedList(BY_CALLSIGN);
     }
 
@@ -139,6 +146,11 @@ public class ActiveFlightService {
             log.warn("Skipping corrupted Valkey entry: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** Simulator events belong to simulation mode; everything else (OpenSky, untagged legacy) to live mode. */
+    private boolean matchesCurrentFeed(FlightTelemetry flight) {
+        return flight.isSimulated() == modeManager.isSimulationMode();
     }
 
     private boolean isStale(FlightTelemetry flight, long now) {

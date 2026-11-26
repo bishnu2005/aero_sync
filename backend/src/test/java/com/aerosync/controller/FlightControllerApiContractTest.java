@@ -1,6 +1,11 @@
 package com.aerosync.controller;
 
+import com.aerosync.messaging.TelemetryStream;
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.SystemMetricsService;
+import com.aerosync.observability.TelemetryMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.aerosync.repository.FlightRecordRepository;
 import com.aerosync.service.ActiveFlightService;
 import com.aerosync.service.FlightLookupService;
@@ -48,7 +53,8 @@ import static org.mockito.Mockito.when;
  * manager are mocked.
  */
 @WebFluxTest(controllers = {FlightController.class, SystemController.class})
-@Import({ActiveFlightService.class, FlightLookupService.class, FlightControllerApiContractTest.ClockConfig.class})
+@Import({ActiveFlightService.class, FlightLookupService.class, TelemetryMetrics.class, SystemMetricsService.class,
+        TelemetryStream.class, FlightControllerApiContractTest.ClockConfig.class})
 @TestPropertySource(properties = {
         "aerosync.cors.allowed-origins=http://localhost:5173,https://*.vercel.app",
         "aerosync.cache.stale-seconds=300"
@@ -64,6 +70,11 @@ class FlightControllerApiContractTest {
         Clock testClock() {
             return CLOCK;
         }
+
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
     }
 
     @Autowired
@@ -71,6 +82,9 @@ class FlightControllerApiContractTest {
 
     @Autowired
     ObjectMapper objectMapper;
+
+    @Autowired
+    TelemetryMetrics telemetryMetrics;
 
     @MockitoBean
     ReactiveStringRedisTemplate valkey;
@@ -157,7 +171,8 @@ class FlightControllerApiContractTest {
                     .jsonPath("$.requestsUsedToday").isEqualTo(2)
                     .jsonPath("$.dailyLimit").isEqualTo(400)
                     .jsonPath("$.windowResetAt").isEqualTo("2026-11-28T00:00:00Z")
-                    .jsonPath("$.activeFlightCount").isEqualTo(2);
+                    .jsonPath("$.activeFlightCount").isEqualTo(2)
+                    .jsonPath("$.feed").isEqualTo("LIVE_FEED");
         }
 
         @Test
@@ -176,7 +191,8 @@ class FlightControllerApiContractTest {
                     .jsonPath("$.message").isEqualTo("Free-tier daily OpenSky quota reached (3/3). Live flight simulator active.")
                     .jsonPath("$.requestsUsedToday").isEqualTo(3)
                     .jsonPath("$.dailyLimit").isEqualTo(3)
-                    .jsonPath("$.activeFlightCount").isEqualTo(1);
+                    .jsonPath("$.activeFlightCount").isEqualTo(1)
+                    .jsonPath("$.feed").isEqualTo("SIMULATED_FALLBACK");
         }
 
         @Test
@@ -188,6 +204,43 @@ class FlightControllerApiContractTest {
                     .expectBody()
                     .jsonPath("$.mode").isEqualTo("SIMULATION")
                     .jsonPath("$.reason").isEqualTo("UPSTREAM_RATE_LIMITED_429");
+        }
+
+        @Test
+        void metricsSnapshotContractAndCacheHitRatio() {
+            // The meter registry is shared across this test class, so assert on deltas.
+            long hitsBefore = telemetryMetrics.lookupHits();
+            long missesBefore = telemetryMetrics.lookupMisses();
+            long lookupsBefore = hitsBefore + missesBefore + telemetryMetrics.lookupErrors();
+            cacheContains(json(flight("AIC860", "800a01", now())));
+            web.get().uri("/api/flights/AIC860").exchange().expectStatus().isOk();       // Valkey hit
+            web.get().uri("/api/flights/ZZZ999").exchange().expectStatus().isNotFound(); // miss -> PostgreSQL
+
+            assertThat(telemetryMetrics.lookupHits()).isEqualTo(hitsBefore + 1);
+            assertThat(telemetryMetrics.lookupMisses()).isEqualTo(missesBefore + 1);
+            web.get().uri("/api/system/metrics").exchange()
+                    .expectStatus().isOk()
+                    .expectBody()
+                    .jsonPath("$.feed").isEqualTo("LIVE_FEED")
+                    .jsonPath("$.cacheLookups").isEqualTo((int) (lookupsBefore + 2))
+                    .jsonPath("$.cacheHitRatio").isNumber()
+                    .jsonPath("$.eventsPerSecond").isEqualTo(0.0)
+                    .jsonPath("$.websocketSubscribers").isEqualTo(0)
+                    .jsonPath("$.upstreamErrors").isEqualTo(0)
+                    .jsonPath("$.uptimeSeconds").exists()
+                    .jsonPath("$.timestamp").isEqualTo("2026-11-27T10:00:00Z");
+        }
+
+        @Test
+        void valkeyErrorCountsAsLookupErrorNotMiss() {
+            long missesBefore = telemetryMetrics.lookupMisses();
+            long errorsBefore = telemetryMetrics.lookupErrors();
+            when(hash.values(ActiveFlightService.ACTIVE_FLIGHTS_KEY)).thenReturn(Flux.error(new IllegalStateException("down")));
+
+            web.get().uri("/api/flights/AIC860").exchange().expectStatus().isNotFound();
+
+            assertThat(telemetryMetrics.lookupErrors()).isEqualTo(errorsBefore + 1);
+            assertThat(telemetryMetrics.lookupMisses()).isEqualTo(missesBefore);
         }
 
         @Test
@@ -234,6 +287,40 @@ class FlightControllerApiContractTest {
                     .jsonPath("$[0].icao24").isEqualTo("800a01")
                     .jsonPath("$[0].altitude").isEqualTo(35000.0)
                     .jsonPath("$[0].heading").isEqualTo(210.0);
+        }
+
+        @Test
+        void liveFeedHidesSimulatorLeftoversAndSimulatedFeedHidesLiveData() {
+            cacheContains(
+                    json(flight("ABY800", "896558", now())),
+                    json(com.aerosync.support.TestFlights.simulated("AIC860", "800a01", now())));
+
+            when(modeManager.isSimulationMode()).thenReturn(false);
+            web.get().uri("/api/flights/active").exchange()
+                    .expectStatus().isOk()
+                    .expectBody()
+                    .jsonPath("$.length()").isEqualTo(1)
+                    .jsonPath("$[0].callsign").isEqualTo("ABY800")
+                    .jsonPath("$[0].origin").isEqualTo("OPENSKY");
+            // A simulator leftover is not reported as an ACTIVE live flight.
+            web.get().uri("/api/flights/AIC860").exchange().expectStatus().isNotFound();
+
+            when(modeManager.isSimulationMode()).thenReturn(true);
+            web.get().uri("/api/flights/active").exchange()
+                    .expectStatus().isOk()
+                    .expectBody()
+                    .jsonPath("$.length()").isEqualTo(1)
+                    .jsonPath("$[0].callsign").isEqualTo("AIC860")
+                    .jsonPath("$[0].origin").isEqualTo("SIMULATOR");
+        }
+
+        @Test
+        void untaggedLegacyEntriesCountAsLiveData() {
+            cacheContains("{\"callsign\":\"OLD123\",\"icao24\":\"abcdef\",\"latitude\":1,\"longitude\":2,"
+                    + "\"altitude\":3,\"velocity\":4,\"heading\":5,\"timestamp\":" + now() + "}");
+            web.get().uri("/api/flights/active").exchange()
+                    .expectStatus().isOk()
+                    .expectBody().jsonPath("$[0].callsign").isEqualTo("OLD123");
         }
 
         @Test
@@ -307,7 +394,8 @@ class FlightControllerApiContractTest {
                     .jsonPath("$.velocity").isEqualTo(245.0)
                     .jsonPath("$.velocityKnots").isEqualTo(476.2)
                     .jsonPath("$.heading").isEqualTo(210.0)
-                    .jsonPath("$.timestamp").isEqualTo(now());
+                    .jsonPath("$.timestamp").isEqualTo(now())
+                    .jsonPath("$.origin").isEqualTo("OPENSKY");
             verify(repository, never()).findLatestByIdentifier(anyString());
         }
 

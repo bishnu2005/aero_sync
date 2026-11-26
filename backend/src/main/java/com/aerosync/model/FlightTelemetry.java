@@ -11,6 +11,7 @@ package com.aerosync.model;
  * @param velocity  ground speed in metres per second
  * @param heading   true track in degrees clockwise from north (0-360)
  * @param timestamp epoch milliseconds of the position report
+ * @param origin    where the event came from: {@value #ORIGIN_OPENSKY} (real data) or {@value #ORIGIN_SIMULATOR}
  */
 public record FlightTelemetry(
         String callsign,
@@ -20,10 +21,19 @@ public record FlightTelemetry(
         double altitude,
         double velocity,
         double heading,
-        long timestamp
+        long timestamp,
+        String origin
 ) {
+    public static final String ORIGIN_OPENSKY = "OPENSKY";
+    public static final String ORIGIN_SIMULATOR = "SIMULATOR";
+
     public FlightTelemetry withCallsign(String newCallsign) {
-        return new FlightTelemetry(newCallsign, icao24, latitude, longitude, altitude, velocity, heading, timestamp);
+        return new FlightTelemetry(newCallsign, icao24, latitude, longitude, altitude, velocity, heading, timestamp, origin);
+    }
+
+    /** Events written before origin tagging existed carry {@code null}; only the simulator ever sets SIMULATOR. */
+    public boolean isSimulated() {
+        return ORIGIN_SIMULATOR.equals(origin);
     }
 
     public static FlightTelemetry fromRecord(FlightRecord r) {
@@ -35,7 +45,8 @@ public record FlightTelemetry(
                 r.altitude() != null ? r.altitude() : 0.0,
                 r.velocity() != null ? r.velocity() : 0.0,
                 r.heading() != null ? r.heading() : 0.0,
-                r.recordedAt() != null ? r.recordedAt() : 0L
+                r.recordedAt() != null ? r.recordedAt() : 0L,
+                r.origin()
         );
     }
 }

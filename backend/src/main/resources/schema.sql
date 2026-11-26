@@ -10,11 +10,14 @@ CREATE TABLE IF NOT EXISTS flight_telemetry_history (
     altitude    DOUBLE PRECISION,
     velocity    DOUBLE PRECISION,
     heading     DOUBLE PRECISION,
-    recorded_at BIGINT           NOT NULL
+    recorded_at BIGINT           NOT NULL,
+    origin      VARCHAR(16)
 );
 
 -- Upgrades databases created by earlier AeroSync versions (before heading was tracked).
 ALTER TABLE flight_telemetry_history ADD COLUMN IF NOT EXISTS heading DOUBLE PRECISION;
+-- OPENSKY (real data) or SIMULATOR (synthetic fallback); NULL for rows written before tagging.
+ALTER TABLE flight_telemetry_history ADD COLUMN IF NOT EXISTS origin VARCHAR(16);
 
 CREATE INDEX IF NOT EXISTS idx_telemetry_callsign_time
     ON flight_telemetry_history (callsign, recorded_at DESC);

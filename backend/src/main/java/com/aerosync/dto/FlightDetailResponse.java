@@ -2,7 +2,10 @@ package com.aerosync.dto;
 
 import com.aerosync.model.FlightTelemetry;
 
-/** Result of a Flight ID / Callsign lookup. */
+/**
+ * Result of a Flight ID / Callsign lookup. {@code source} is the store that answered (Valkey or PostgreSQL);
+ * {@code origin} is where the data came from (OPENSKY or SIMULATOR).
+ */
 public record FlightDetailResponse(
         String callsign,
         String icao24,
@@ -14,7 +17,8 @@ public record FlightDetailResponse(
         double heading,
         long timestamp,
         String status,
-        String source
+        String source,
+        String origin
 ) {
     public static final String STATUS_ACTIVE = "ACTIVE";
     public static final String STATUS_HISTORICAL = "HISTORICAL";
@@ -27,6 +31,6 @@ public record FlightDetailResponse(
         double knots = Math.round(t.velocity() * MPS_TO_KNOTS * 10.0) / 10.0;
         return new FlightDetailResponse(
                 t.callsign(), t.icao24(), t.latitude(), t.longitude(), t.altitude(),
-                t.velocity(), knots, t.heading(), t.timestamp(), status, source);
+                t.velocity(), knots, t.heading(), t.timestamp(), status, source, t.origin());
     }
 }

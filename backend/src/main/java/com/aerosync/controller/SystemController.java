@@ -1,7 +1,9 @@
 package com.aerosync.controller;
 
 import com.aerosync.dto.HealthResponse;
+import com.aerosync.dto.SystemMetrics;
 import com.aerosync.dto.SystemStatus;
+import com.aerosync.observability.SystemMetricsService;
 import com.aerosync.service.ActiveFlightService;
 import com.aerosync.service.TelemetryModeManager;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,12 +19,21 @@ public class SystemController {
 
     private final TelemetryModeManager telemetryModeManager;
     private final ActiveFlightService activeFlightService;
+    private final SystemMetricsService systemMetricsService;
     private final Clock clock;
 
-    public SystemController(TelemetryModeManager telemetryModeManager, ActiveFlightService activeFlightService, Clock clock) {
+    public SystemController(TelemetryModeManager telemetryModeManager, ActiveFlightService activeFlightService,
+                            SystemMetricsService systemMetricsService, Clock clock) {
         this.telemetryModeManager = telemetryModeManager;
         this.activeFlightService = activeFlightService;
+        this.systemMetricsService = systemMetricsService;
         this.clock = clock;
+    }
+
+    /** Pipeline health snapshot for the dashboard status bar; full meters are at /actuator/metrics. */
+    @GetMapping("/system/metrics")
+    public Mono<SystemMetrics> metrics() {
+        return Mono.fromSupplier(systemMetricsService::snapshot);
     }
 
     /** Liveness probe for Render/Koyeb/Docker. Deliberately does not touch Kafka, Valkey or PostgreSQL. */

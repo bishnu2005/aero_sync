@@ -191,7 +191,8 @@ public class AviationApiClient {
                 altitudeMeters != null ? Math.round(altitudeMeters * METERS_TO_FEET) : 0.0,
                 velocity != null ? velocity : 0.0,
                 heading != null ? heading : 0.0,
-                lastContact != null ? (long) (lastContact * 1000) : clock.millis()
+                lastContact != null ? (long) (lastContact * 1000) : clock.millis(),
+                FlightTelemetry.ORIGIN_OPENSKY
         );
     }
 

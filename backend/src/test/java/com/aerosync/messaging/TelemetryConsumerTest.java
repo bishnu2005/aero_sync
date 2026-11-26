@@ -2,6 +2,8 @@ package com.aerosync.messaging;
 
 import com.aerosync.model.FlightRecord;
 import com.aerosync.model.FlightTelemetry;
+import com.aerosync.observability.TelemetryMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.aerosync.repository.FlightRecordRepository;
 import com.aerosync.service.ActiveFlightService;
 import com.aerosync.support.MutableClock;
@@ -39,6 +41,7 @@ class TelemetryConsumerTest {
     private ReactiveStringRedisTemplate valkey;
     private ReactiveHashOperations<String, String, String> hash;
     private TelemetryConsumer consumer;
+    private TelemetryMetrics metrics;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -50,7 +53,8 @@ class TelemetryConsumerTest {
         when(valkey.<String, String>opsForHash()).thenReturn(hash);
         when(hash.put(anyString(), anyString(), anyString())).thenReturn(Mono.just(true));
         when(repository.save(any(FlightRecord.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        consumer = new TelemetryConsumer(stream, repository, valkey, TestFlights.MAPPER, clock, 15);
+        metrics = new TelemetryMetrics(new SimpleMeterRegistry());
+        consumer = new TelemetryConsumer(stream, repository, valkey, TestFlights.MAPPER, clock, metrics, 15);
     }
 
     private String message(String callsign) {
@@ -102,6 +106,25 @@ class TelemetryConsumerTest {
         clock.advance(Duration.ofSeconds(12));
         consumer.consume(message("AIC860"));
         verify(repository, times(2)).save(any());
+
+        assertThat(metrics.consumedTotal()).isEqualTo(3);
+        assertThat(metrics.dbWrites()).isEqualTo(2);
+        assertThat(metrics.dbWritesThrottled()).isEqualTo(1);
+    }
+
+    @Test
+    void dropsAndFailuresAreCounted() {
+        when(hash.put(anyString(), anyString(), anyString())).thenReturn(Mono.error(new IllegalStateException("down")));
+        when(repository.save(any(FlightRecord.class))).thenReturn(Mono.error(new IllegalStateException("down")));
+
+        consumer.consume("not json");
+        consumer.consume(message("  "));
+        consumer.consume(message("AIC860"));
+
+        assertThat(metrics.droppedTotal()).isEqualTo(2);
+        assertThat(metrics.consumedTotal()).isEqualTo(1);
+        assertThat(metrics.cacheWriteFailures()).isEqualTo(1);
+        assertThat(metrics.dbWriteFailures()).isEqualTo(1);
     }
 
     @Test

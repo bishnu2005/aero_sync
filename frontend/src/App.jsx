@@ -6,6 +6,7 @@ import { apiUrl, ENDPOINTS, getWsUrl } from './config/api'
 import { findExactMatch, flightKey, matchesQuery, sortFlights, validateIdentifier } from './lib/flight'
 import { planeIcon } from './lib/planeIcon'
 import { TILE_THEMES } from './lib/mapTheme'
+import { feedOf, matchesFeed } from './lib/status'
 import { useSystemStatus } from './hooks/useSystemStatus'
 import { useTelemetrySocket } from './hooks/useTelemetrySocket'
 import ConnectionBanner from './components/ConnectionBanner'
@@ -13,6 +14,7 @@ import FlightDetailCard from './components/FlightDetailCard'
 import MapController from './components/MapController'
 import MapControls from './components/MapControls'
 import Sidebar from './components/Sidebar'
+import SystemHealthBar from './components/SystemHealthBar'
 
 const INDIA_CENTER = [21.0, 78.0]
 const SLOW_START_MS = 2500
@@ -53,7 +55,9 @@ export default function App() {
   const pendingRef = useRef(new Map())
   const flushTimerRef = useRef(null)
 
-  const status = useSystemStatus()
+  const { status, refresh: refreshStatus } = useSystemStatus()
+  const feed = status && !status.unavailable ? feedOf(status) : null
+  const feedRef = useRef(feed)
 
   const loadActiveFlights = useCallback(() => {
     return fetchActiveFlights().then((next) => {
@@ -79,6 +83,8 @@ export default function App() {
 
   // WebSocket frames are batched so a burst of live OpenSky updates costs one render.
   const handleTelemetry = useCallback((telemetry) => {
+    // A frame from the other feed means the backend switched modes: re-check the badge right away.
+    if (feedRef.current && !matchesFeed(telemetry, feedRef.current)) refreshStatus()
     pendingRef.current.set(flightKey(telemetry), telemetry)
     if (flushTimerRef.current) return
     flushTimerRef.current = setTimeout(() => {
@@ -94,7 +100,21 @@ export default function App() {
         return next
       })
     }, FLUSH_MS)
-  }, [])
+  }, [refreshStatus])
+
+  // When the feed changes (live <-> simulated), reload the snapshot so the other feed's aircraft vanish.
+  useEffect(() => {
+    const previous = feedRef.current
+    feedRef.current = feed
+    if (!previous || !feed || previous === feed) return
+    let cancelled = false
+    fetchActiveFlights().then((next) => {
+      if (!cancelled && next) setFlights(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [feed])
 
   const handleSocketOpen = useCallback(() => {
     setLoaded(true)
@@ -117,10 +137,14 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
-  const allFlights = useMemo(() => sortFlights(Object.values(flights)), [flights])
+  // Only aircraft from the feed named on the badge are shown, so synthetic data is never labelled live.
+  const allFlights = useMemo(
+    () => sortFlights(Object.values(flights).filter((f) => matchesFeed(f, feed))),
+    [flights, feed],
+  )
   const visibleFlights = useMemo(() => allFlights.filter((f) => matchesQuery(f, query)), [allFlights, query])
 
-  const liveSelected = selectedKey ? flights[selectedKey] : null
+  const liveSelected = selectedKey && flights[selectedKey] && matchesFeed(flights[selectedKey], feed) ? flights[selectedKey] : null
   const detail = liveSelected ? { ...liveSelected, status: 'ACTIVE', source: 'LIVE_STREAM' } : lookupDetail
   const historicalMarker = !liveSelected && lookupDetail ? lookupDetail : null
 
@@ -220,6 +244,8 @@ export default function App() {
       />
 
       <ConnectionBanner message={bannerMessage} />
+
+      <SystemHealthBar />
 
       <FlightDetailCard flight={detail} onClose={closeDetail} onCenter={focusOn} />
 

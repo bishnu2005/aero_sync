@@ -7,11 +7,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.time.Duration;
 
-/** Keeps free-tier stores small: prunes old PostgreSQL history and evicts stale Valkey flights. */
+/**
+ * Keeps free-tier stores small: prunes old PostgreSQL history and evicts stale Valkey flights.
+ * Both jobs are reactive {@code @Scheduled} methods, so no scheduler thread waits on I/O.
+ */
 @Service
 public class DataRetentionService {
 
@@ -38,27 +42,32 @@ public class DataRetentionService {
 
     @Scheduled(fixedDelayString = "${aerosync.db.prune-interval-ms:3600000}",
             initialDelayString = "${aerosync.db.prune-initial-delay-ms:60000}")
-    public void pruneHistory() {
-        try {
-            long cutoff = clock.millis() - retentionMillis;
-            Long deleted = repository.deleteOlderThan(cutoff).block(DEADLINE);
-            log.info("Pruned {} flight history rows older than {} h.", deleted, retentionMillis / 3_600_000);
-            telemetryConsumer.forgetIdleCallsigns(Duration.ofHours(1).toMillis());
-        } catch (RuntimeException e) {
-            log.error("Flight history pruning failed: {}", e.getMessage());
-        }
+    public Mono<Void> pruneHistory() {
+        return Mono.defer(() -> repository.deleteOlderThan(clock.millis() - retentionMillis))
+                .timeout(DEADLINE)
+                .doOnNext(deleted -> log.info("Pruned {} flight history rows older than {} h.", deleted, retentionMillis / 3_600_000))
+                .doFinally(signal -> telemetryConsumer.forgetIdleCallsigns(Duration.ofHours(1).toMillis()))
+                .onErrorResume(e -> {
+                    log.error("Flight history pruning failed: {}", e.getMessage());
+                    return Mono.empty();
+                })
+                .then();
     }
 
     @Scheduled(fixedDelayString = "${aerosync.cache.eviction-interval-ms:60000}",
             initialDelayString = "${aerosync.cache.eviction-initial-delay-ms:60000}")
-    public void evictStaleFlights() {
-        try {
-            Long evicted = activeFlightService.evictStale().block(DEADLINE);
-            if (evicted != null && evicted > 0) {
-                log.info("Evicted {} stale or corrupted entries from Valkey.", evicted);
-            }
-        } catch (RuntimeException e) {
-            log.error("Valkey stale-flight eviction failed: {}", e.getMessage());
-        }
+    public Mono<Void> evictStaleFlights() {
+        return Mono.defer(activeFlightService::evictStale)
+                .timeout(DEADLINE)
+                .doOnNext(evicted -> {
+                    if (evicted > 0) {
+                        log.info("Evicted {} stale or corrupted entries from Valkey.", evicted);
+                    }
+                })
+                .onErrorResume(e -> {
+                    log.error("Valkey stale-flight eviction failed: {}", e.getMessage());
+                    return Mono.empty();
+                })
+                .then();
     }
 }

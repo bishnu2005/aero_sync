@@ -195,41 +195,7 @@ cd frontend && npm run build
 | `FlightSimulatorTest`, `DataRetentionServiceTest`, `KafkaSecuritySupportTest` | Corridors and realism, pruning and eviction, PEM/SASL mapping |
 | `frontend/src/test/*` | Rendering, feed badges, live/simulated separation, health bar, live filtering, search (live hit, archive hit, 404, 400, client validation), WebSocket updates in the open card, marker click, sidebar collapse, theme toggle, zoom, cold-start and reconnect banners, URL resolution |
 
-## $0 free-tier deployment (Topology B)
 
-```
- Vercel / Netlify (static React) ──HTTPS/WSS──► Render / Koyeb (backend Docker, 512 MB)
-                                                     ├─► Aiven for Apache Kafka (free)
-                                                     ├─► Aiven for Valkey (free)  or Upstash Redis
-                                                     └─► Aiven for PostgreSQL (free)  or Neon
-```
-
-1. **Managed services.** Create the free Kafka, Valkey and PostgreSQL services (Aiven covers all three;
-   Neon and Upstash also work). Create the topic `telemetry.flights.live` if your Kafka plan doesn't
-   allow auto-creation. AeroSync also declares it on startup.
-   * The simulator sends about 230k Kafka messages and Valkey writes per day (8 aircraft every 3 s). Check
-     your Redis provider's command quota: Aiven Valkey has no per-command cap, and Upstash's free tier may
-     run out. Raise `SIMULATOR_INTERVAL_MS` to cut the volume.
-2. **Backend on Render.** Use *New → Blueprint* with this repo; `render.yaml` defines a free Docker
-   web service with `healthCheckPath: /api/health`. Fill in the prompted secrets
-   (startup verification steps are in [ENGINEERING_DEEP_DIVE.md §6](ENGINEERING_DEEP_DIVE.md#6-hosting-and-deployment-blueprint-0-tier)):
-   * `SPRING_R2DBC_URL=r2dbc:postgresql://<host>:<port>/<db>?sslMode=require`, plus `SPRING_R2DBC_USERNAME` / `SPRING_R2DBC_PASSWORD`
-   * `SPRING_DATA_REDIS_URL=rediss://default:<password>@<host>:<port>`
-   * `SPRING_KAFKA_BOOTSTRAP_SERVERS=<host>:<port>`, `SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL=SSL`
-   * `KAFKA_CA_CERT_B64`, `KAFKA_CLIENT_CERT_B64`, `KAFKA_CLIENT_KEY_B64`: Aiven's `ca.pem`, `service.cert`,
-     `service.key`, each encoded with `base64 -i <file> | tr -d '\n'`. The key must be PKCS#8
-     (`BEGIN PRIVATE KEY`); convert with `openssl pkcs8 -topk8 -nocrypt -in service.key` if needed.
-     For SASL_SSL, set `SPRING_KAFKA_PROPERTIES_SASL_MECHANISM` and `SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG` instead of the client cert/key.
-   * `CORS_ALLOWED_ORIGINS=https://<your-app>.vercel.app` (comma separated; patterns allowed)
-
-   **Koyeb** works the same way: deploy `backend/` as a Docker service, set the same variables and use
-   `/api/health` as the health check. `PORT` is read automatically.
-3. **Frontend on Vercel or Netlify.** Set the project root to `frontend/` and add
-   `VITE_API_BASE_URL=https://<backend>.onrender.com`. The WebSocket URL is derived from it
-   (`https` → `wss`); set `VITE_WS_URL` only to override it. `vercel.json` and `public/_redirects`
-   handle SPA routing.
-4. **Cold starts.** Free Render services sleep when idle. The UI shows "Waking up AeroSync server..."
-   and reconnects on its own once the backend is up.
 
 ### OpenSky credentials
 Anonymous access gives 400 requests a day, which is the default. `OPENSKY_USERNAME` / `OPENSKY_PASSWORD`

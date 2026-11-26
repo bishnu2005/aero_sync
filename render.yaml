@@ -1,0 +1,52 @@
+# Render Blueprint: AeroSync backend on the free plan (512 MB RAM).
+# Deploy the frontend separately on Vercel/Netlify (see README) with VITE_API_BASE_URL set to this
+# service's URL. Values marked `sync: false` are prompted for in the Render dashboard and never committed.
+services:
+  - type: web
+    name: aerosync-backend
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # PostgreSQL (Neon / Aiven): r2dbc:postgresql://<host>:<port>/<db>?sslMode=require
+      - key: SPRING_R2DBC_URL
+        sync: false
+      - key: SPRING_R2DBC_USERNAME
+        sync: false
+      - key: SPRING_R2DBC_PASSWORD
+        sync: false
+      # Valkey / Redis over TLS: rediss://<user>:<password>@<host>:<port>
+      - key: SPRING_DATA_REDIS_URL
+        sync: false
+      # Kafka (Aiven free tier, client-certificate auth)
+      - key: SPRING_KAFKA_BOOTSTRAP_SERVERS
+        sync: false
+      - key: SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL
+        value: SSL
+      - key: KAFKA_CA_CERT_B64
+        sync: false
+      - key: KAFKA_CLIENT_CERT_B64
+        sync: false
+      - key: KAFKA_CLIENT_KEY_B64
+        sync: false
+      # For SASL_SSL instead of client certificates, also set:
+      #   SPRING_KAFKA_PROPERTIES_SASL_MECHANISM (e.g. SCRAM-SHA-256)
+      #   SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+      # OpenSky
+      - key: OPENSKY_ENABLED
+        value: "true"
+      - key: OPENSKY_DAILY_LIMIT
+        value: "400"
+      - key: OPENSKY_USERNAME
+        sync: false
+      - key: OPENSKY_PASSWORD
+        sync: false
+      # Comma separated; patterns allowed, e.g. https://aerosync.vercel.app,https://*.netlify.app
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: SIMULATOR_INTERVAL_MS
+        value: "3000"

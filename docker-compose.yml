@@ -1,3 +1,4 @@
+# Topology A: full local stack.  docker compose up --build -d   ->  http://localhost:5173
 services:
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -13,7 +14,15 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:29093'
       KAFKA_PROCESS_ROLES: 'broker,controller'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
   postgres:
     image: postgres:16-alpine
@@ -21,31 +30,61 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: aerosync
-      POSTGRES_USER: aerosync_user
-      POSTGRES_PASSWORD: aerosync_password
+      POSTGRES_DB: ${POSTGRES_DB:-aerosync}
+      POSTGRES_USER: ${POSTGRES_USER:-aerosync_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aerosync_password}
     volumes:
       - postgres_aerosync:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   valkey:
     image: valkey/valkey:8.0
     container_name: aerosync-valkey
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   backend:
     build: ./backend
     container_name: aerosync-backend
     ports:
       - "8080:8080"
+    mem_limit: 512m
     depends_on:
-      - postgres
-      - kafka
-      - valkey
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
     environment:
-      - SPRING_R2DBC_URL=r2dbc:postgresql://postgres:5432/aerosync
-      - SPRING_DATA_REDIS_HOST=valkey
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/${POSTGRES_DB:-aerosync}
+      SPRING_R2DBC_USERNAME: ${POSTGRES_USER:-aerosync_user}
+      SPRING_R2DBC_PASSWORD: ${POSTGRES_PASSWORD:-aerosync_password}
+      SPRING_DATA_REDIS_HOST: valkey
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      OPENSKY_ENABLED: ${OPENSKY_ENABLED:-true}
+      OPENSKY_DAILY_LIMIT: ${OPENSKY_DAILY_LIMIT:-400}
+      OPENSKY_POLL_INTERVAL_MS: ${OPENSKY_POLL_INTERVAL_MS:-60000}
+      OPENSKY_USERNAME: ${OPENSKY_USERNAME:-}
+      OPENSKY_PASSWORD: ${OPENSKY_PASSWORD:-}
+      SIMULATOR_INTERVAL_MS: ${SIMULATOR_INTERVAL_MS:-3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
   frontend:
     build: ./frontend
@@ -53,7 +92,8 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_aerosync:

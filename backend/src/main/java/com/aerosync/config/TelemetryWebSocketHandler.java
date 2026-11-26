@@ -15,11 +15,14 @@ public class TelemetryWebSocketHandler implements WebSocketHandler {
         this.telemetryStream = telemetryStream;
     }
 
+    /**
+     * Streams telemetry until the client goes away. Watching the inbound side means a closed browser
+     * tab ends the session (and its subscription) immediately instead of on the next failed write.
+     */
     @Override
     public Mono<Void> handle(WebSocketSession session) {
-        return session.send(
-                telemetryStream.getStream()
-                        .map(session::textMessage)
-        );
+        Mono<Void> outbound = session.send(telemetryStream.getStream().map(session::textMessage));
+        Mono<Void> inbound = session.receive().then();
+        return Mono.firstWithSignal(outbound, inbound);
     }
 }

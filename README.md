@@ -87,6 +87,13 @@ reason and `used/limit` polls.
 
 ## Local quickstart (Topology A: Docker)
 
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop) (running) and Git. You don't
+need Java, Node, Kafka or PostgreSQL installed locally.
+
+```bash
+git clone https://github.com/bishnu2005/aero_sync.git && cd aero_sync
+```
+
 ```bash
 cp .env.example .env    # optional, every value has a default
 ```
